@@ -22,6 +22,7 @@ import os
 import time
 import PIL
 from PIL import ImageFile
+from PIL import Image as PILImage
 from std_msgs.msg import Float32MultiArray
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -32,7 +33,7 @@ from keras_retinanet import models
 from keras_retinanet.utils.image import read_image_bgr, preprocess_image, resize_image
 from keras_retinanet.utils.visualization import draw_box, draw_caption
 from keras_retinanet.utils.colors import label_color
-from path_planner.msg import TrafficLightArray, TrafficLight, TrafficSignArray, TrafficSign
+from path_planner.msg import TrafficLightArray, TrafficLight, TrafficSignArray, TrafficSign, ObstacleArray, Obstacle
 
 # ros
 import rospy
@@ -64,7 +65,7 @@ class CameraDetectionROSNode:
     def __init__(self):
         self.image = None   # image variable
         self.active = True  # should we be processing images
-
+        self.obstacle_publisher = rospy.Publisher('/obstacle', ObstacleArray, queue_size = 1)
         # CTRL+C signal handler
         signal.signal(signal.SIGINT, self.signalInterruptHandler)
 
@@ -96,11 +97,13 @@ class CameraDetectionROSNode:
                                ,74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush'}
 
         # begin processing images
+        self.p2 = np.array([[553.144531, 0.000000, 383.442257, 0.000000], [0.000000, 552.951477, 348.178354, 0.000000], [0.000000, 0.000000, 1.000000, 0]])
+        self.p2_inv = np.linalg.pinv(self.p2)
         self.processImages()
 
     # signal interrupt handler, immediate stop of CAN_Controller
     def signalInterruptHandler(self, signum, frame):
-        print("Camera Detection - Exiting ROS Node...")
+        #print("Camera Detection - Exiting ROS Node...")
 
         # shut down ROS node and stop processess
         rospy.signal_shutdown("CTRL+C Signal Caught.")
@@ -110,14 +113,13 @@ class CameraDetectionROSNode:
 
     def updateImage(self, image_msg):
         # convert and resize
-        image = self.bridge.imgmsg_to_cv2(image_msg, "bgr8")
+        image = self.bridge.imgmsg_to_cv2(image_msg, "rgb8")
         #image, scale = resize_image(image)
-
         # save image in class
         self.image = image
 
     def processImages(self):
-        print("Waiting for Images...")
+        #print("Waiting for Images...")
         while(self.image is None):
             pass
 
@@ -126,14 +128,14 @@ class CameraDetectionROSNode:
 
     def getDistance(self, box,width,pWidth,dist,calibration):
         focalPoint = (pWidth * dist)/width
-        print("Focal point",focalPoint)
+        #print("Focal point",focalPoint)
         focalPoint *= calibration
         pixW = min(abs(box[2]-box[0]),abs(box[3]-box[1]))
-        print(pixW)
+        #print(pixW)
         distance = (width*focalPoint)/abs(box[2]-box[0])
         distance = distance/12
 
-        print("Distance: ",(distance-5)*.3048)#*alpha)
+        #print("Distance: ",(distance-5)*.3048)#*alpha)
 
         return (distance-5)*.3048
 
@@ -151,7 +153,7 @@ class CameraDetectionROSNode:
         img3 = np.array(crop_img)
 
         #px = img3[10,10]
-        #print(px,px[0])
+        ##print(px,px[0])
         #plt.imshow(img3)
 
         green_score = 0
@@ -194,10 +196,10 @@ class CameraDetectionROSNode:
 
         # process image
         start = time.time()
-        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-        print("Processing Image...")
+        #print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+        #print("Processing Image...")
         boxes, scores, labels = model.predict(np.expand_dims(image, axis=0))
-        print("processing time: ", time.time() - start)
+        #print("processing time: ", time.time() - start)
 
         # correct for image scale
         boxes /= scale
@@ -205,6 +207,7 @@ class CameraDetectionROSNode:
         # visualize detections
         traffic_light_array = TrafficLightArray()
         traffic_sign_array = TrafficSignArray()
+        obstacle_array = ObstacleArray()
         for box, score, label in zip(boxes[0], scores[0], labels[0]):
             # scores are sorted so we can break
             if score < 0.5:
@@ -231,9 +234,11 @@ class CameraDetectionROSNode:
                 traff_light_msg.y = 0
 
                 if what_color == 1:
-                    print(box,"red")
+                    pass
+                    #print(box,"red")
                 else:
-                    print(box,"green")
+                    pass
+                    #print(box,"green")
                 traffic_light_array.lights.append(traff_light_msg)
 
             if(label == 11): #is a stopsign
@@ -252,11 +257,42 @@ class CameraDetectionROSNode:
 
             if(label == 2):
                 #send info to Nick
-                array_msg.data = list(box)
-                self.bbox_pub.publish(array_msg)
+                u_min, u_max = box[0]/2.56,box[2]/2.56
+                v_min, v_max = box[1]/2.56, box[3]/2.56
+                width = u_max - u_min
+                if box[2] > 300 and width > 80 and box[0] < 1800:
+                    print(box)
+                    array_msg.data = list(box)
+                    distance = self.getDistance(box,64.4,196,466, 1.13)
+                    print("car distance", distance)
+                    max_hom = np.array([u_max, v_max, 1])
+                    min_hom = np.array([u_min, v_max, 1])
+                    max_p = np.dot(self.p2_inv, max_hom)[:3]
+                    min_p = np.dot(self.p2_inv, min_hom)[:3]
+                    if max_p[2] < 0:
+                        max_p[0], max_p[2] = -max_p[0], -max_p[2]
+                    if min_p[2] < 0:
+                        min_p[0], min_p[2] = -min_p[0], -min_p[2]
 
-            print("I see a " + str(self.labels_to_names[label]) + "(" + str(score) + ")")
+                    max_frustum_angle = (np.arctan2(max_p[0], max_p[2])) * -1 
+                    print("max angle", max_frustum_angle)
+                    min_frustum_angle = (np.arctan2(min_p[0], min_p[2])) * -1
+                    print("min angle", min_frustum_angle)
+                    right = distance * np.tan(max_frustum_angle)
+                    left = distance * np.tan(min_frustum_angle)
 
+                    obstacle_array = ObstacleArray()
+                    obs = Obstacle()
+                    obs.x1 = distance
+                    obs.x2 = distance + 1.85
+                    obs.y1 = right
+                    obs.y2 = left
+            
+
+                    print("left:", left,"right:", right,"distance", distance)
+            #print("I see a " + str(self.labels_to_names[label]) + "(" + str(score) + ")")
+
+        self.obstacle_publisher.publish(obstacle_array)
         self.traff_light_pub.publish(traffic_light_array)
         self.traff_sign_pub.publish(traffic_sign_array)
 
@@ -270,7 +306,7 @@ class CameraDetectionROSNode:
         try:
             self.detect_pub.publish(self.bridge.cv2_to_imgmsg(draw, "bgr8"))
         except CvBridgeError as e:
-            print(e)
+            pass#print(e)
 
 if __name__ == "__main__":
     # start camera detection ros node
