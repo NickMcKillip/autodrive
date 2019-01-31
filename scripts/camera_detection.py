@@ -260,7 +260,7 @@ class CameraDetectionROSNode:
                 u_min, u_max = box[0]/2.56,box[2]/2.56
                 v_min, v_max = box[1]/2.56, box[3]/2.56
                 width = u_max - u_min
-                if box[2] > 300 and width > 80 and box[0] < 1800:
+                if box[2] > 300 and width > 100 and box[0] < 1800:
                     print(box)
                     array_msg.data = list(box)
                     distance = self.getDistance(box,64.4,196,466, 1.13)
@@ -278,17 +278,16 @@ class CameraDetectionROSNode:
                     print("max angle", max_frustum_angle)
                     min_frustum_angle = (np.arctan2(min_p[0], min_p[2])) * -1
                     print("min angle", min_frustum_angle)
-                    right = distance * np.tan(max_frustum_angle)
-                    left = distance * np.tan(min_frustum_angle)
+                    right = (distance-1) * np.tan(max_frustum_angle)
+                    left = (distance-1) * np.tan(min_frustum_angle)
 
-                    obstacle_array = ObstacleArray()
                     obs = Obstacle()
                     obs.x1 = distance
                     obs.x2 = distance + 1.85
                     obs.y1 = right
                     obs.y2 = left
             
-
+                    obstacle_array.append(obs)
                     print("left:", left,"right:", right,"distance", distance)
             #print("I see a " + str(self.labels_to_names[label]) + "(" + str(score) + ")")
 
