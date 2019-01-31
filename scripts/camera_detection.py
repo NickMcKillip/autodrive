@@ -287,7 +287,7 @@ class CameraDetectionROSNode:
                     obs.y1 = right
                     obs.y2 = left
             
-                    obstacle_array.append(obs)
+                    obstacle_array.obstacles.append(obs)
                     print("left:", left,"right:", right,"distance", distance)
             #print("I see a " + str(self.labels_to_names[label]) + "(" + str(score) + ")")
 
